@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RDP Viewer</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <style>
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+
+        .viewer-shell {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .display {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+        }
+
+        .guac-display-host {
+            flex: 0 0 auto;
+            max-width: none;
+            max-height: none;
+        }
+
+        .viewer-header {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+            display: none;
+            padding: 15px;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+        }
+
+        .viewer-header.active {
+            display: block;
+        }
+
+        #ui-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 101;
+            padding: 5px 10px;
+            color: #fff;
+            cursor: pointer;
+            background: #444;
+            border: none;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="viewer-page">
+    <main class="viewer-shell">
+        <button id="ui-toggle">Session Info</button>
+        <header id="info-panel" class="viewer-header">
+            <div>
+                <div class="eyebrow">Remote Desktop</div>
+                <h1 id="viewer-title">Connecting...</h1>
+            </div>
+            <div class="viewer-actions">
+                <p id="status-text" class="status">Preparing session...</p>
+                <button id="logout-button" class="button secondary" type="button">Logout</button>
+            </div>
+        </header>
+
+        <section id="display" class="display"></section>
+        <section id="overlay" class="overlay">
+            <div class="panel overlay-card">
+                <h2 id="overlay-title">Starting RDP session</h2>
+                <p id="overlay-message" class="muted">Please wait while the browser connects to the remote desktop.</p>
+                <div id="overlay-actions" style="margin-top: 20px;" hidden>
+                    <button id="reconnect-button" class="button primary" type="button" hidden>Reconnect</button>
+                    <button id="overlay-logout-button" class="button secondary" type="button" hidden>Logout</button>
+                </div>
+                <a id="back-link" href="/login" hidden>Back to login</a>
+            </div>
+        </section>
+    </main>
+
+    <script src="/vendor/guacamole/guacamole-common.min.js"></script>
+    <script src="/assets/viewer.js"></script>
+</body>
+</html>

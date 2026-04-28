@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RDP Login</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <style>
+        /* Loading overlay */
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        #loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .loading-card {
+            background: #fff;
+            padding: 32px 40px;
+            border-radius: 12px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px auto;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Error popup modal */
+        #error-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 300;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        #error-modal.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .error-card {
+            background: #fff;
+            padding: 24px 28px;
+            border-radius: 12px;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        .error-card h2 {
+            margin: 0 0 12px 0;
+            font-size: 1.25rem;
+            color: #dc2626;
+        }
+        .error-card p {
+            margin: 0 0 20px 0;
+            color: #374151;
+            line-height: 1.5;
+        }
+        .error-card button {
+            width: 100%;
+        }
+    </style>
+</head>
+<body class="login-page">
+    <main class="panel login-panel">
+        <div class="eyebrow">Guacamole Lite</div>
+        <h1>Login to RDP</h1>
+        <p class="muted">Connect to <strong id="target-host">192.168.101.3</strong> with your RDP username and password.</p>
+
+        <form id="login-form" class="stack">
+            <label class="field">
+                <span>Username</span>
+                <input id="username" name="username" type="text" autocomplete="username" required>
+            </label>
+
+            <label class="field">
+                <span>Password</span>
+                <input id="password" name="password" type="password" autocomplete="current-password" required>
+            </label>
+
+            <button type="submit" class="button" id="login-button">Open RDP</button>
+            <p id="error-message" class="error" hidden></p>
+        </form>
+    </main>
+
+    <!-- Loading Overlay -->
+    <section id="loading-overlay">
+        <div class="loading-card">
+            <div class="spinner"></div>
+            <h2>Creating RDP connection…</h2>
+            <p class="muted">Please wait while we establish the remote desktop session.</p>
+        </div>
+    </section>
+
+    <!-- Error Popup Modal -->
+    <section id="error-modal">
+        <div class="error-card">
+            <h2 id="error-modal-title">Connection Failed</h2>
+            <p id="error-modal-message">An unexpected error occurred.</p>
+            <button id="error-modal-close" class="button primary" type="button">OK</button>
+        </div>
+    </section>
+
+    <!-- Guacamole library required for connection test on login page -->
+    <script src="/vendor/guacamole/guacamole-common.min.js"></script>
+    <script src="/assets/login.js"></script>
+</body>
+</html>
+

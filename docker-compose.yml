@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  guacd:
+    image: guacamole/guacd:latest
+    container_name: guacd
+    restart: always
+    ports:
+      - "4822:4822"
