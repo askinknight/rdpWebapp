@@ -1,0 +1,4 @@
+:443 {
+    tls /certs/localhost.crt /certs/localhost.key
+    reverse_proxy 192.168.101.3:3000
+}

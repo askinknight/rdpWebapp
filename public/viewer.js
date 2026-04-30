@@ -16,6 +16,10 @@ const targetPortInput = document.getElementById('target-port');
 const connectTargetButton = document.getElementById('connect-target');
 // Note: paste UI removed to allow native copy/paste behavior
 
+const CONTROL_LEFT_KEYSYM = 0xFFE3;
+const INSERT_KEYSYM = 0xFF63;
+const V_KEYSYM = 0x0076;
+
 let client = null;
 let mouse = null;
 let keyboard = null;
@@ -26,6 +30,10 @@ let resizeTimer = 0;
 let statusResetTimer = 0;
 let lastRequestedSizeKey = '';
 let clipboardFallbackInput = null;
+let clipboardBridgeInput = null;
+let clipboardPasteFallbackTimer = 0;
+let pendingPasteShortcut = null;
+let suppressedPasteKey = '';
 let audioUnlockBound = false;
 let microphoneRecorder = null;
 let microphoneStreamIndex = null;
@@ -378,6 +386,70 @@ function ensureClipboardFallbackInput() {
     return clipboardFallbackInput;
 }
 
+function ensureClipboardBridgeInput() {
+    if (clipboardBridgeInput) {
+        return clipboardBridgeInput;
+    }
+
+    clipboardBridgeInput = document.createElement('textarea');
+    clipboardBridgeInput.setAttribute('aria-hidden', 'true');
+    clipboardBridgeInput.setAttribute('autocomplete', 'off');
+    clipboardBridgeInput.setAttribute('autocapitalize', 'off');
+    clipboardBridgeInput.setAttribute('autocorrect', 'off');
+    clipboardBridgeInput.setAttribute('spellcheck', 'false');
+    clipboardBridgeInput.tabIndex = -1;
+    clipboardBridgeInput.style.position = 'fixed';
+    clipboardBridgeInput.style.opacity = '0';
+    clipboardBridgeInput.style.pointerEvents = 'none';
+    clipboardBridgeInput.style.left = '-9999px';
+    clipboardBridgeInput.style.top = '0';
+    clipboardBridgeInput.style.width = '1px';
+    clipboardBridgeInput.style.height = '1px';
+    clipboardBridgeInput.style.padding = '0';
+    clipboardBridgeInput.style.border = '0';
+    clipboardBridgeInput.style.resize = 'none';
+    clipboardBridgeInput.value = '';
+    clipboardBridgeInput.addEventListener('input', () => {
+        clipboardBridgeInput.value = '';
+    });
+    document.body.appendChild(clipboardBridgeInput);
+    return clipboardBridgeInput;
+}
+
+function focusClipboardBridge() {
+    if (!isConnected() || !overlay.classList.contains('hidden')) {
+        return;
+    }
+
+    const bridge = ensureClipboardBridgeInput();
+
+    try {
+        bridge.focus({ preventScroll: true });
+        bridge.select();
+        bridge.setSelectionRange(0, bridge.value.length);
+    } catch (_error) {
+    }
+}
+
+function blurClipboardBridge() {
+    if (!clipboardBridgeInput || document.activeElement !== clipboardBridgeInput) {
+        return;
+    }
+
+    clipboardBridgeInput.blur();
+}
+
+function isLocalEditableElement(element) {
+    return Boolean(
+        element
+        && element !== clipboardBridgeInput
+        && (
+            element.matches?.('input, textarea, select')
+            || element.isContentEditable
+        )
+    );
+}
+
 function fallbackCopyToClipboard(text) {
     const input = ensureClipboardFallbackInput();
     input.value = text;
@@ -426,6 +498,35 @@ function sendClipboardTextToRemote(text) {
     setTemporaryStatus('Clipboard pasted into remote session');
 }
 
+function sendRemotePasteGesture(shortcutType = '') {
+    if (!isConnected()) {
+        return;
+    }
+
+    if (shortcutType === 'shift-insert') {
+        sendRemoteKeyTap(INSERT_KEYSYM);
+        return;
+    }
+
+    if (shortcutType === 'ctrl-v') {
+        sendRemoteKeyTap(V_KEYSYM);
+        return;
+    }
+
+    sendRemoteKeyChord(CONTROL_LEFT_KEYSYM, V_KEYSYM);
+}
+
+function pasteTextIntoRemote(text, shortcutType = '') {
+    if (!text) {
+        setTemporaryStatus('Local clipboard is empty', 1400);
+        return false;
+    }
+
+    sendClipboardTextToRemote(text);
+    sendRemotePasteGesture(shortcutType);
+    return true;
+}
+
 function sendRemoteKeyTap(keysym) {
     if (!isConnected()) {
         return;
@@ -446,8 +547,8 @@ function sendRemoteKeyChord(modifierKeysym, keyKeysym) {
     client.sendKeyEvent(0, modifierKeysym);
 }
 
-// Removed synthetic paste shortcut triggering so local keyboard events are used
-// (right-click / user keyboard paste flows directly to the remote session).
+// Clipboard sync prefers real browser paste gestures, then mirrors those into
+// the remote session using Guacamole clipboard streams and a matching key chord.
 
 async function readLocalClipboardText() {
     if (!navigator.clipboard?.readText) {
@@ -468,27 +569,114 @@ async function syncLocalClipboardToRemote(shortcutType = '') {
         return false;
     }
 
-    sendClipboardTextToRemote(text);
-    return true;
+    return pasteTextIntoRemote(text, shortcutType);
 }
 
 function handlePaste(event) {
     if (!isConnected()) {
         return;
     }
-    // Intentionally left empty: we no longer intercept paste events.
+
+    const activeElement = document.activeElement;
+    const target = event.target;
+    const targetIsBridge = target === clipboardBridgeInput;
+
+    if (!targetIsBridge && isLocalEditableElement(activeElement)) {
+        return;
+    }
+
+    const text = event.clipboardData?.getData('text/plain') || '';
+
+    if (!text) {
+        return;
+    }
+
+    event.preventDefault();
+    const shortcutType = pendingPasteShortcut?.type || '';
+    window.clearTimeout(clipboardPasteFallbackTimer);
+    pendingPasteShortcut = null;
+    pasteTextIntoRemote(text, shortcutType);
 }
 
 function handleClipboardShortcut(event) {
     if (!isConnected()) {
         return;
     }
-    // Intentionally left empty: do not intercept Ctrl+V/Shift+Insert keyboard shortcuts.
+
+    const activeElement = document.activeElement;
+
+    if (isLocalEditableElement(activeElement)) {
+        return;
+    }
+
+    const key = String(event.key || '');
+    let shortcutType = '';
+
+    if (event.ctrlKey && !event.altKey && !event.metaKey && key.toLowerCase() === 'v') {
+        shortcutType = 'ctrl-v';
+    } else if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && key === 'Insert') {
+        shortcutType = 'shift-insert';
+    }
+
+    if (!shortcutType) {
+        return;
+    }
+
+    if (event.repeat || pendingPasteShortcut?.type === shortcutType) {
+        event.stopImmediatePropagation();
+        return;
+    }
+
+    focusClipboardBridge();
+    pendingPasteShortcut = {
+        type: shortcutType,
+        key
+    };
+    suppressedPasteKey = shortcutType === 'ctrl-v' ? 'v' : 'Insert';
+
+    window.clearTimeout(clipboardPasteFallbackTimer);
+    clipboardPasteFallbackTimer = window.setTimeout(async () => {
+        if (!pendingPasteShortcut || pendingPasteShortcut.type !== shortcutType) {
+            return;
+        }
+
+        try {
+            const text = await readLocalClipboardText();
+
+            if (!pendingPasteShortcut || pendingPasteShortcut.type !== shortcutType) {
+                return;
+            }
+
+            pendingPasteShortcut = null;
+            pasteTextIntoRemote(text);
+        } catch (_error) {
+            if (pendingPasteShortcut?.type === shortcutType) {
+                pendingPasteShortcut = null;
+                setTemporaryStatus('Paste was blocked by the browser. Click the remote desktop and try again.', 3200);
+            }
+        }
+    }, 80);
+
+    event.stopImmediatePropagation();
+}
+
+function handleClipboardKeyup(event) {
+    const key = String(event.key || '');
+    const normalizedKey = key.toLowerCase();
+
+    if (
+        (suppressedPasteKey === 'v' && normalizedKey === 'v')
+        || (suppressedPasteKey === 'Insert' && key === 'Insert')
+    ) {
+        suppressedPasteKey = '';
+        event.stopImmediatePropagation();
+    }
 }
 
 function cleanupClient() {
     window.clearTimeout(resizeTimer);
     window.clearTimeout(statusResetTimer);
+    window.clearTimeout(clipboardPasteFallbackTimer);
     // clipboardPasteTimer removed: do not clear synthetic paste timer
     const activeClient = client;
     const shouldEndMicrophoneStream = Boolean(
@@ -500,6 +688,8 @@ function cleanupClient() {
         )
     );
     lastRequestedSizeKey = '';
+    pendingPasteShortcut = null;
+    suppressedPasteKey = '';
     clientState = Guacamole.Client.State.IDLE;
     sessionCapabilities = null;
 
@@ -591,6 +781,15 @@ async function startViewer() {
         connectedStatus = buildConnectedStatus(tokenData.targetHost, tokenData.targetPort);
         bindAudioUnlock();
         resumeAudioContext();
+        focusClipboardBridge();
+
+        displayElement.addEventListener('pointerdown', () => {
+            window.setTimeout(() => {
+                if (client === activeClient) {
+                    focusClipboardBridge();
+                }
+            }, 0);
+        });
 
         activeClient.getDisplay().onresize = () => {
             if (client !== activeClient) {
@@ -770,6 +969,7 @@ async function startViewer() {
                 connecting = false;
                 statusText.textContent = connectedStatus;
                 hideOverlay();
+                focusClipboardBridge();
                 scheduleRemoteResize(true);
 
                 if (tokenData.microphoneMimetype || negotiateAudioTypes(tokenData).length) {
@@ -831,7 +1031,7 @@ async function pasteLocalClipboardToRemote() {
             return;
         }
 
-        sendClipboardTextToRemote(text);
+        pasteTextIntoRemote(text);
     } catch (err) {
         // Try fallback: ask user to paste into textarea
         setTemporaryStatus('Unable to read clipboard (browser blocked). Use manual paste area.', 3000);
@@ -853,7 +1053,8 @@ reconnectButton.addEventListener('click', handleReconnect);
 overlayLogoutButton.addEventListener('click', logout);
 logoutButton.addEventListener('click', logout);
 
-// Paste UI removed: rely on browser/OS native copy-paste and right-click menu for remote insertion.
+// Clipboard bridge is active globally, but only takes over paste gestures while
+// the remote viewer has focus.
 
 window.addEventListener('resize', () => {
     scheduleRemoteResize();
@@ -865,6 +1066,24 @@ window.visualViewport?.addEventListener('resize', () => {
 
 // Do not register global paste/clipboard shortcut handlers anymore — let browser/OS
 // and the user's keyboard/menu actions flow naturally into the remote session.
+
+window.addEventListener('keydown', handleClipboardShortcut, true);
+window.addEventListener('keyup', handleClipboardKeyup, true);
+window.addEventListener('paste', handlePaste, true);
+
+display.addEventListener('pointerdown', () => {
+    window.setTimeout(() => {
+        focusClipboardBridge();
+    }, 0);
+});
+
+infoPanel.addEventListener('focusin', () => {
+    blurClipboardBridge();
+});
+
+overlay.addEventListener('focusin', () => {
+    blurClipboardBridge();
+});
 
 window.addEventListener('beforeunload', () => {
     cleanupClient();
@@ -885,12 +1104,6 @@ startViewer();
         wrapper.style.marginTop = '12px';
         wrapper.innerHTML = `\
             <div style="margin-top:8px">\
-                <label style="color:#ddd; display:block; margin-bottom:6px">Remote Clipboard</label>\
-                <textarea id="remote-clipboard-area" rows="3" style="width:380px; max-width:calc(100vw - 40px); background:#111; color:#fff; border:1px solid #666; border-radius:6px; padding:8px"></textarea>\
-                <div style="margin-top:6px">\
-                    <button id="copy-remote-clipboard" class="button" type="button">Copy remote → local</button>\
-                    <button id="paste-local-to-remote" class="button" type="button" style="margin-left:8px">Paste local → remote</button>\
-                </div>\
             </div>`;
 
         panel.appendChild(wrapper);

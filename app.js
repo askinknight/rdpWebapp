@@ -182,7 +182,7 @@ app.get('/api/guacamole-token', (req, res) => {
         'enable-font-smoothing': true,
         'enable-menu-animations': true,
         'enable-clipboard': true,
-        'normalize-clipboard': "preserve"
+        'normalize-clipboard': RDP_CLIPBOARD_NORMALIZATION
     };
 
     applyTrueFlag(settings, 'disable-audio', validationOnly);
