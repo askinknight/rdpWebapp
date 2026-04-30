@@ -11,6 +11,10 @@ const reconnectButton = document.getElementById('reconnect-button');
 const overlayLogoutButton = document.getElementById('overlay-logout-button');
 const overlayActions = document.getElementById('overlay-actions');
 const infoPanel = document.getElementById('info-panel');
+const targetHostInput = document.getElementById('target-host');
+const targetPortInput = document.getElementById('target-port');
+const connectTargetButton = document.getElementById('connect-target');
+// Note: paste UI removed to allow native copy/paste behavior
 
 let client = null;
 let mouse = null;
@@ -27,7 +31,7 @@ let microphoneRecorder = null;
 let microphoneStreamIndex = null;
 let microphoneStartAttempted = false;
 let sessionCapabilities = null;
-let clipboardPasteTimer = 0;
+let lastRemoteClipboardText = '';
 
 function getAudioContext() {
     try {
@@ -304,6 +308,13 @@ function buildTokenUrl() {
         params.set('timezone', timezone);
     }
 
+    // Allow overriding target host/port via UI inputs. Server may accept these query params.
+    const host = targetHostInput?.value?.trim();
+    const port = targetPortInput?.value?.trim();
+
+    if (host) params.set('targetHost', host);
+    if (port) params.set('targetPort', port);
+
     return `/api/guacamole-token?${params.toString()}`;
 }
 
@@ -435,21 +446,8 @@ function sendRemoteKeyChord(modifierKeysym, keyKeysym) {
     client.sendKeyEvent(0, modifierKeysym);
 }
 
-function triggerRemotePasteShortcut(shortcutType) {
-    window.clearTimeout(clipboardPasteTimer);
-    clipboardPasteTimer = window.setTimeout(() => {
-        if (!isConnected()) {
-            return;
-        }
-
-        if (shortcutType === 'shift-insert') {
-            sendRemoteKeyChord(0xFFE1, 0xFF63);
-            return;
-        }
-
-        sendRemoteKeyChord(0xFFE3, 0x0076);
-    }, 60);
-}
+// Removed synthetic paste shortcut triggering so local keyboard events are used
+// (right-click / user keyboard paste flows directly to the remote session).
 
 async function readLocalClipboardText() {
     if (!navigator.clipboard?.readText) {
@@ -471,11 +469,6 @@ async function syncLocalClipboardToRemote(shortcutType = '') {
     }
 
     sendClipboardTextToRemote(text);
-
-    if (shortcutType) {
-        triggerRemotePasteShortcut(shortcutType);
-    }
-
     return true;
 }
 
@@ -483,53 +476,20 @@ function handlePaste(event) {
     if (!isConnected()) {
         return;
     }
-
-    const text = event.clipboardData?.getData('text/plain');
-
-    if (text) {
-        event.preventDefault();
-        sendClipboardTextToRemote(text);
-        triggerRemotePasteShortcut('ctrl-v');
-        return;
-    }
-
-    if (navigator.clipboard?.readText) {
-        event.preventDefault();
-        syncLocalClipboardToRemote('ctrl-v')
-            .catch((error) => {
-                console.error('Unable to read local clipboard:', error);
-                setTemporaryStatus('Browser blocked clipboard read');
-            });
-    }
+    // Intentionally left empty: we no longer intercept paste events.
 }
 
 function handleClipboardShortcut(event) {
     if (!isConnected()) {
         return;
     }
-
-    const key = String(event.key || '').toLowerCase();
-    const isCtrlLikePaste = (event.ctrlKey || event.metaKey) && !event.altKey && key === 'v';
-    const isShiftInsertPaste = event.shiftKey && !event.ctrlKey && !event.metaKey && key === 'insert';
-
-    if (!isCtrlLikePaste && !isShiftInsertPaste) {
-        return;
-    }
-
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    syncLocalClipboardToRemote(isShiftInsertPaste ? 'shift-insert' : 'ctrl-v')
-        .catch((error) => {
-            console.error('Unable to sync local clipboard to remote:', error);
-            setTemporaryStatus(error.message || 'Browser blocked clipboard read', 3200);
-        });
+    // Intentionally left empty: do not intercept Ctrl+V/Shift+Insert keyboard shortcuts.
 }
 
 function cleanupClient() {
     window.clearTimeout(resizeTimer);
     window.clearTimeout(statusResetTimer);
-    window.clearTimeout(clipboardPasteTimer);
+    // clipboardPasteTimer removed: do not clear synthetic paste timer
     const activeClient = client;
     const shouldEndMicrophoneStream = Boolean(
         activeClient
@@ -610,6 +570,14 @@ async function startViewer() {
 
         statusText.textContent = 'Connecting to guacd...';
 
+        // If user provided host/port in UI, reflect that in the title (best-effort).
+        const overrideHost = targetHostInput?.value?.trim();
+        const overridePort = targetPortInput?.value?.trim();
+        const displayHost = overrideHost || tokenData.targetHost || sessionData.targetHost || '';
+        const displayPort = overridePort || tokenData.targetPort || sessionData.targetPort || '';
+
+        viewerTitle.textContent = displayHost ? `${displayHost}${displayPort ? ':' + displayPort : ''} as ${sessionData.username}` : `${sessionData.targetHost} as ${sessionData.username}`;
+
         const tunnel = new Guacamole.WebSocketTunnel(buildWebSocketUrl());
         const activeClient = new Guacamole.Client(tunnel);
         client = activeClient;
@@ -645,6 +613,65 @@ async function startViewer() {
                 activeClient.getDisplay().showCursor(false);
             }
         });
+
+        // Touch -> synthesize mouse events so mobile touch works as clicks/drags
+        (function setupTouchToMouse() {
+            if (!displayElement) return;
+            let lastTap = 0;
+
+            displayElement.addEventListener('touchstart', (e) => {
+                if (client !== activeClient) return;
+                e.preventDefault();
+                const touches = e.changedTouches;
+
+                // Two-finger touch: treat as right-click down
+                if (touches.length >= 2) {
+                    const t = touches[0];
+                    const me = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 2 });
+                    displayElement.dispatchEvent(me);
+                    return;
+                }
+
+                const t = touches[0];
+                const me = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 0 });
+                displayElement.dispatchEvent(me);
+            }, { passive: false });
+
+            displayElement.addEventListener('touchmove', (e) => {
+                if (client !== activeClient) return;
+                e.preventDefault();
+                const t = e.changedTouches[0];
+                const me = new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 0 });
+                displayElement.dispatchEvent(me);
+            }, { passive: false });
+
+            displayElement.addEventListener('touchend', (e) => {
+                if (client !== activeClient) return;
+                e.preventDefault();
+                const touches = e.changedTouches;
+
+                if (touches.length >= 2) {
+                    const t = touches[0];
+                    const me = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 2 });
+                    displayElement.dispatchEvent(me);
+                    return;
+                }
+
+                const t = touches[0];
+                const me = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 0 });
+                displayElement.dispatchEvent(me);
+
+                // Double-tap → double-click
+                const now = Date.now();
+                if (now - lastTap <= 300) {
+                    const dblDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 0 });
+                    const dblUp = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY, button: 0 });
+                    displayElement.dispatchEvent(dblDown);
+                    displayElement.dispatchEvent(dblUp);
+                }
+                lastTap = now;
+            }, { passive: false });
+        })();
 
         activeClient.getDisplay().oncursor = (canvas, x, y) => {
             if (client !== activeClient || !mouse) {
@@ -684,6 +711,12 @@ async function startViewer() {
                 if (client !== activeClient) {
                     return;
                 }
+
+                lastRemoteClipboardText = text || '';
+
+                // Update status and store the text in a visible place if the UI exposes it
+                const clipboardArea = document.getElementById('remote-clipboard-area');
+                if (clipboardArea) clipboardArea.value = lastRemoteClipboardText;
 
                 const copied = await copyToLocalClipboard(text);
                 setTemporaryStatus(
@@ -774,6 +807,44 @@ async function startViewer() {
     }
 }
 
+// UI clipboard helpers
+async function copyRemoteClipboardToLocal() {
+    if (!lastRemoteClipboardText) {
+        setTemporaryStatus('No remote clipboard data available', 1800);
+        return;
+    }
+
+    const ok = await copyToLocalClipboard(lastRemoteClipboardText);
+    setTemporaryStatus(ok ? 'Remote clipboard copied to local' : 'Copy blocked by browser', ok ? 1800 : 3200);
+}
+
+async function pasteLocalClipboardToRemote() {
+    if (!isConnected()) {
+        setTemporaryStatus('Not connected to remote session', 1600);
+        return;
+    }
+
+    try {
+        const text = await readLocalClipboardText();
+        if (!text) {
+            setTemporaryStatus('Local clipboard is empty', 1400);
+            return;
+        }
+
+        sendClipboardTextToRemote(text);
+    } catch (err) {
+        // Try fallback: ask user to paste into textarea
+        setTemporaryStatus('Unable to read clipboard (browser blocked). Use manual paste area.', 3000);
+    }
+}
+
+// Connect-to-target handler
+connectTargetButton?.addEventListener('click', () => {
+    cleanupClient();
+    setOverlay('Starting RDP session', 'Connecting to the selected target...');
+    window.setTimeout(() => startViewer(), 200);
+});
+
 uiToggle.addEventListener('click', () => {
     infoPanel.classList.toggle('active');
 });
@@ -781,6 +852,8 @@ uiToggle.addEventListener('click', () => {
 reconnectButton.addEventListener('click', handleReconnect);
 overlayLogoutButton.addEventListener('click', logout);
 logoutButton.addEventListener('click', logout);
+
+// Paste UI removed: rely on browser/OS native copy-paste and right-click menu for remote insertion.
 
 window.addEventListener('resize', () => {
     scheduleRemoteResize();
@@ -790,11 +863,44 @@ window.visualViewport?.addEventListener('resize', () => {
     scheduleRemoteResize();
 });
 
-window.addEventListener('paste', handlePaste);
-window.addEventListener('keydown', handleClipboardShortcut, true);
+// Do not register global paste/clipboard shortcut handlers anymore — let browser/OS
+// and the user's keyboard/menu actions flow naturally into the remote session.
 
 window.addEventListener('beforeunload', () => {
     cleanupClient();
 });
 
 startViewer();
+
+// Add optional remote clipboard area to info panel if present (inject if missing)
+(function ensureClipboardArea() {
+    try {
+        const existing = document.getElementById('remote-clipboard-area');
+        if (existing) return;
+
+        const panel = infoPanel;
+        if (!panel) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.style.marginTop = '12px';
+        wrapper.innerHTML = `\
+            <div style="margin-top:8px">\
+                <label style="color:#ddd; display:block; margin-bottom:6px">Remote Clipboard</label>\
+                <textarea id="remote-clipboard-area" rows="3" style="width:380px; max-width:calc(100vw - 40px); background:#111; color:#fff; border:1px solid #666; border-radius:6px; padding:8px"></textarea>\
+                <div style="margin-top:6px">\
+                    <button id="copy-remote-clipboard" class="button" type="button">Copy remote → local</button>\
+                    <button id="paste-local-to-remote" class="button" type="button" style="margin-left:8px">Paste local → remote</button>\
+                </div>\
+            </div>`;
+
+        panel.appendChild(wrapper);
+
+        const copyBtn = document.getElementById('copy-remote-clipboard');
+        const pasteBtn = document.getElementById('paste-local-to-remote');
+
+        copyBtn?.addEventListener('click', copyRemoteClipboardToLocal);
+        pasteBtn?.addEventListener('click', pasteLocalClipboardToRemote);
+    } catch (_e) {
+        // no-op
+    }
+})();

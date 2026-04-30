@@ -53,7 +53,8 @@ app.use(
 app.use('/assets', express.static(path.join(__dirname, 'public')));
 app.use(
     '/vendor/guacamole',
-    express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'cjs'))
+    // Serve the browser UMD/ES build (dist) rather than CommonJS (dist/cjs)
+    express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist' , 'cjs'))
 );
 
 function encryptToken(payload) {
@@ -180,7 +181,8 @@ app.get('/api/guacamole-token', (req, res) => {
         'enable-desktop-composition': true,
         'enable-font-smoothing': true,
         'enable-menu-animations': true,
-        'normalize-clipboard': RDP_CLIPBOARD_NORMALIZATION
+        'enable-clipboard': true,
+        'normalize-clipboard': "preserve"
     };
 
     applyTrueFlag(settings, 'disable-audio', validationOnly);
@@ -220,18 +222,71 @@ app.get('/health', (_req, res) => {
     });
 });
 
+// Build client options to provide sane defaults for RDP and secure token handling.
+const clientOptions = {
+    crypt: {
+        cypher: TOKEN_CIPHER,
+        key: tokenKey
+    },
+    // Default connection settings for RDP sessions
+    connectionDefaultSettings: {
+        rdp: {
+            'security': 'any',
+            'ignore-cert': true,
+            'color-depth': 24,
+            'enable-touch': true,
+            'enable-wallpaper': true,
+            'enable-full-window-drag': true,
+            'enable-desktop-composition': true,
+            'enable-font-smoothing': true,
+            'enable-menu-animations': true,
+            'enable-clipboard': true,
+            'normalize-clipboard': RDP_CLIPBOARD_NORMALIZATION,
+            'audio': RDP_AUDIO_TYPES
+        }
+    },
+    // Allow safe query overrides (width/height/dpi/timezone/audio/video/image)
+    allowedUnencryptedConnectionSettings: {
+        rdp: ['width', 'height', 'dpi', 'timezone', 'audio', 'video', 'image']
+    },
+    // Logging level for guacamole-lite
+    log: {
+        level: process.env.GUAC_LOG_LEVEL || 'NORMAL'
+    }
+};
+
+// Callbacks for validation and optional session registry (in-memory by default)
+const sessionRegistry = new Map();
+
+const callbacks = {
+    processConnectionSettings: (settings, callback) => {
+        try {
+            // Optional token expiry enforcement
+            if (settings['expiration'] && Number(settings['expiration']) < Date.now()) {
+                return callback(new Error('Token expired'));
+            }
+
+            // Per-user drive path when a userId is provided
+            if (settings['userId'] && settings.connection) {
+                settings.connection['drive-path'] = `/tmp/guacamole_${settings['userId']}`;
+            }
+
+            callback(null, settings);
+        } catch (err) {
+            callback(err);
+        }
+    },
+    sessionRegistry
+};
+
 new GuacamoleLite(
     { server },
     {
         host: GUACD_HOST,
         port: GUACD_PORT
     },
-    {
-        crypt: {
-            cypher: TOKEN_CIPHER,
-            key: tokenKey
-        }
-    }
+    clientOptions,
+    callbacks
 );
 
 server.listen(PORT, () => {
