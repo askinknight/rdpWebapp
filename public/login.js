@@ -8,6 +8,8 @@ const errorModalMessage = document.getElementById('error-modal-message');
 const errorModalClose = document.getElementById('error-modal-close');
 
 let activeConnectionTest = null;
+const CONNECTION_TEST_TIMEOUT_MS = 15000;
+const CONNECTION_STABILITY_MS = 3000;
 
 function showLoading() {
     loadingOverlay.classList.add('active');
@@ -58,6 +60,10 @@ function mapConnectionError(error) {
         return 'Unable to validate the RDP connection.';
     }
 
+    if (error.validationDisconnected) {
+        return 'The remote desktop disconnected before login validation completed. Please verify the password and try again.';
+    }
+
     const code = error.code;
     if (
         code === Guacamole.Status.Code.CLIENT_UNAUTHORIZED
@@ -93,6 +99,7 @@ function cleanupConnectionTest(testState) {
 
     testState.cleaned = true;
     window.clearTimeout(testState.timeoutId);
+    window.clearTimeout(testState.stabilityTimerId);
 
     if (testState.client) {
         try {
@@ -126,7 +133,9 @@ function testConnection(tokenData) {
             host,
             cleaned: false,
             resolved: false,
-            timeoutId: 0
+            timeoutId: 0,
+            stabilityTimerId: 0,
+            connected: false
         };
 
         activeConnectionTest = testState;
@@ -160,7 +169,7 @@ function testConnection(tokenData) {
 
         testState.timeoutId = window.setTimeout(() => {
             finishError(new Error('Connection timed out while validating RDP access.'));
-        }, 10000);
+        }, CONNECTION_TEST_TIMEOUT_MS);
 
         client.onerror = (error) => {
             finishError(error);
@@ -168,7 +177,25 @@ function testConnection(tokenData) {
 
         client.onstatechange = (state) => {
             if (state === Guacamole.Client.State.CONNECTED) {
-                finishSuccess();
+                if (testState.connected) {
+                    return;
+                }
+
+                testState.connected = true;
+                testState.stabilityTimerId = window.setTimeout(() => {
+                    finishSuccess();
+                }, CONNECTION_STABILITY_MS);
+                return;
+            }
+
+            if (state === Guacamole.Client.State.DISCONNECTED) {
+                const disconnectError = new Error(
+                    testState.connected
+                        ? 'The remote desktop disconnected before login validation completed.'
+                        : 'The remote desktop disconnected while validating the login.'
+                );
+                disconnectError.validationDisconnected = testState.connected;
+                finishError(disconnectError);
             }
         };
 
@@ -238,7 +265,17 @@ form.addEventListener('submit', async (event) => {
         }
 
         await testConnection(tokenData);
-        window.location.href = loginData.redirectTo || '/rdp';
+
+        const confirmResponse = await fetch('/api/login/confirm', {
+            method: 'POST'
+        });
+        const confirmData = await confirmResponse.json();
+
+        if (!confirmResponse.ok) {
+            throw new Error(confirmData.error || 'Unable to finalize the RDP login.');
+        }
+
+        window.location.href = confirmData.redirectTo || loginData.redirectTo || '/rdp';
     } catch (error) {
         await clearFailedSession();
         hideLoading();

@@ -11,9 +11,11 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "archiver": "^7.0.1",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "guacamole-common-js": "^1.5.0",
-    "guacamole-lite": "^1.2.0"
+    "guacamole-lite": "^1.2.0",
+    "ssh2-sftp-client": "^12.1.1"
   }
 }

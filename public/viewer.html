@@ -2,71 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
     <title>RDP Viewer</title>
     <link rel="stylesheet" href="/assets/styles.css">
-    <style>
-        html,
-        body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #000;
-        }
-
-        .viewer-shell {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-        }
-
-        .display {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            touch-action: none;
-            user-select: none;
-        }
-
-        .guac-display-host {
-            flex: 0 0 auto;
-            max-width: none;
-            max-height: none;
-        }
-
-        .viewer-header {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 100;
-            display: none;
-            padding: 15px;
-            color: #fff;
-            background: rgba(0, 0, 0, 0.7);
-            border-radius: 8px;
-        }
-
-        .viewer-header.active {
-            display: block;
-        }
-
-        #ui-toggle {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 101;
-            padding: 5px 10px;
-            color: #fff;
-            cursor: pointer;
-            background: #444;
-            border: none;
-            border-radius: 4px;
-        }
-    </style>
 </head>
 <body class="viewer-page">
     <main class="viewer-shell">
@@ -80,9 +18,46 @@
                 <p id="status-text" class="status">Preparing session...</p>
                 <button id="logout-button" class="button secondary" type="button">Logout</button>
             </div>
+            <section id="drive-panel" class="drive-panel">
+                <div class="drive-header">
+                    <div>
+                        <div class="eyebrow">Remote Files</div>
+                        <p id="drive-hint" class="muted drive-hint">Loading machine file browser...</p>
+                    </div>
+                    <div class="drive-actions">
+                        <input id="drive-upload-input" type="file" multiple hidden>
+                        <button id="drive-upload-button" class="button" type="button">Upload Files</button>
+                        <button id="drive-open-folder-button" class="button secondary" type="button">Open Folder</button>
+                    </div>
+                </div>
+                <div id="drive-drop-zone" class="drive-drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="drop-text">Drag files here to upload</p>
+                        <p class="drop-hint">SFTP upload is used automatically when available</p>
+                    </div>
+                </div>
+                <p id="drive-status" class="muted drive-status">Preparing machine file browser...</p>
+                <div id="drive-list" class="drive-list"></div>
+            </section>
+            <section id="transfer-panel" class="transfer-panel">
+                <div class="eyebrow">Transfers</div>
+                <p id="transfer-status" class="muted transfer-status">No print jobs or direct downloads yet.</p>
+                <div id="transfer-list" class="transfer-list"></div>
+            </section>
         </header>
 
         <section id="display" class="display"></section>
+
+        <section class="clipboard-note-bar" aria-live="polite">
+            <p class="muted clipboard-note">
+                Focus the remote desktop, then use Ctrl+V, Ctrl+Shift+V, or Shift+Insert to paste through the Guacamole clipboard stream.
+            </p>
+        </section>
         <section id="overlay" class="overlay">
             <div class="panel overlay-card">
                 <h2 id="overlay-title">Starting RDP session</h2>
@@ -94,7 +69,6 @@
                 <a id="back-link" href="/login" hidden>Back to login</a>
             </div>
         </section>
-        
     </main>
 
     <script src="/vendor/guacamole/guacamole-common.min.js"></script>
