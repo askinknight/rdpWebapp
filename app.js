@@ -1035,6 +1035,7 @@ app.get('/api/guacamole-token', (req, res) => {
         'height': height,
         'dpi': dpi,
         'audio': validationOnly ? [] : RDP_AUDIO_TYPES,
+        'server-layout': 'th-th-qwerty',
         'security': validationOnly ? RDP_VALIDATION_SECURITY : RDP_SECURITY,
         'ignore-cert': true,
         'resize-method': RDP_RESIZE_METHOD,

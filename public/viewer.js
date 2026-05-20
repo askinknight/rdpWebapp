@@ -34,6 +34,9 @@ const V_KEYSYM = 0x0076;
 let client = null;
 let mouse = null;
 let keyboard = null;
+const isMac = /Mac|iPhone|iPod|iPad/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isTablet = /Android|Tablet|iPad/.test(navigator.userAgent);
+
 let activeTunnel = null;
 let clientState = Guacamole.Client.State.IDLE;
 let connecting = false;
@@ -408,11 +411,11 @@ function updateTransferStatus(message) {
 function isDriveAvailable() {
     const available = Boolean(drivePanel && (sessionCapabilities?.driveEnabled || sessionCapabilities?.localFsEnabled));
     if (!available) {
-        console.log('[Drive] Not available', { 
-            drivePanel: !!drivePanel, 
-            driveEnabled: sessionCapabilities?.driveEnabled,
-            localFsEnabled: sessionCapabilities?.localFsEnabled 
-        });
+        // console.log('[Drive] Not available', { 
+        //     drivePanel: !!drivePanel, 
+        //     driveEnabled: sessionCapabilities?.driveEnabled,
+        //     localFsEnabled: sessionCapabilities?.localFsEnabled 
+        // });
     }
     return available;
 }
@@ -502,7 +505,7 @@ function buildDriveApiUrl(relativePath = '') {
 
     const query = params.toString();
     const url = query ? `/api/drive?${query}` : '/api/drive';
-    console.log('[Drive] buildDriveApiUrl:', { relativePath, url });
+    // console.log('[Drive] buildDriveApiUrl:', { relativePath, url });
     return url;
 }
 
@@ -725,12 +728,12 @@ async function parseJsonResponse(response) {
 
 async function loadDriveShare(relativePath = currentDrivePath, { silent = false } = {}) {
     if (!drivePanel) {
-        console.log('[Drive] drivePanel not found');
+        // console.log('[Drive] drivePanel not found');
         return;
     }
 
     if (!isDriveAvailable()) {
-        console.log('[Drive] Drive not available, hiding panel');
+        // console.log('[Drive] Drive not available, hiding panel');
         drivePanel.hidden = true;
         stopDrivePolling();
         clearDriveList();
@@ -740,21 +743,21 @@ async function loadDriveShare(relativePath = currentDrivePath, { silent = false 
     const requestId = ++driveRequestSerial;
     const url = buildDriveApiUrl(relativePath);
     
-    console.log('[Drive] Loading directory:', { relativePath, url, requestId });
+    // console.log('[Drive] Loading directory:', { relativePath, url, requestId });
 
     if (!silent) {
         setDriveStatus('Refreshing machine files...');
     }
 
     try {
-        console.log('[Drive] Fetching:', url);
+        // console.log('[Drive] Fetching:', url);
         const response = await fetch(url);
         const data = await parseJsonResponse(response);
 
-        console.log('[Drive] Response:', { status: response.status, data });
+        // console.log('[Drive] Response:', { status: response.status, data });
 
         if (requestId !== driveRequestSerial) {
-            console.log('[Drive] Request ID mismatch, ignoring response');
+            // console.log('[Drive] Request ID mismatch, ignoring response');
             return;
         }
 
@@ -791,7 +794,7 @@ async function refreshDriveShare(options = {}) {
 }
 
 function syncDriveCapabilities(tokenData) {
-    console.log('[Drive] Syncing capabilities:', { driveEnabled: tokenData?.driveEnabled, localFsEnabled: tokenData?.localFsEnabled });
+    // console.log('[Drive] Syncing capabilities:', { driveEnabled: tokenData?.driveEnabled, localFsEnabled: tokenData?.localFsEnabled });
     
     if (!drivePanel) {
         return;
@@ -800,7 +803,7 @@ function syncDriveCapabilities(tokenData) {
     const hasCapability = tokenData?.driveEnabled || tokenData?.localFsEnabled;
     
     if (!hasCapability) {
-        console.log('[Drive] No file sharing capability available');
+        // console.log('[Drive] No file sharing capability available');
         drivePanel.hidden = true;
         currentDrivePath = '';
         stopDrivePolling();
@@ -893,11 +896,11 @@ async function uploadDriveFile(file) {
             throw new Error(`File exceeds upload limit (${formatDriveFileSize(uploadLimit)})`);
         }
 
-        console.log('[Upload] Starting chunked file upload:', {
-            filename: file.name,
-            size: file.size,
-            currentDrivePath
-        });
+        // console.log('[Upload] Starting chunked file upload:', {
+        //     filename: file.name,
+        //     size: file.size,
+        //     currentDrivePath
+        // });
 
         const startResponse = await fetch(buildDriveUploadUrl('start', { relativePath: currentDrivePath }), {
             method: 'POST',
@@ -1001,7 +1004,7 @@ async function uploadDriveFile(file) {
             throw new Error(completeData.error || 'Unable to finalize upload');
         }
 
-        console.log('[Upload] Success:', file.name);
+        // console.log('[Upload] Success:', file.name);
         return completeData;
     } catch (error) {
         console.error('[Upload] Chunked upload failed:', error);
@@ -1025,22 +1028,22 @@ async function uploadDriveFile(file) {
 
 async function handleDriveUploads(fileList) {
     if (!isDriveAvailable() || !fileList?.length) {
-        console.log('[Upload] Not available or no files', { isDriveAvailable: isDriveAvailable(), fileCount: fileList?.length });
+        // console.log('[Upload] Not available or no files', { isDriveAvailable: isDriveAvailable(), fileCount: fileList?.length });
         return;
     }
 
-    console.log('[Upload] Starting batch upload:', { fileCount: fileList.length, files: Array.from(fileList).map(f => f.name) });
+    // console.log('[Upload] Starting batch upload:', { fileCount: fileList.length, files: Array.from(fileList).map(f => f.name) });
     setDriveControlsDisabled(true);
 
     try {
         for (const file of Array.from(fileList)) {
-            console.log('[Upload] Processing file:', file.name);
+            // console.log('[Upload] Processing file:', file.name);
             await uploadDriveFile(file);
         }
 
         await refreshDriveShare({ silent: true });
         const message = `Uploaded ${fileList.length} file${fileList.length === 1 ? '' : 's'}`;
-        console.log('[Upload] Batch complete:', message);
+        // console.log('[Upload] Batch complete:', message);
         setTemporaryStatus(message, 2600);
     } catch (error) {
         console.error('[Upload] Batch error:', error);
@@ -2135,6 +2138,15 @@ function handlePaste(event) {
     const text = (event.clipboardData || window.clipboardData)?.getData('text');
     if (text) {
         sendClipboardTextToRemote(text);
+        
+        // หลังจาก Sync Clipboard แล้ว ให้สั่ง Remote Paste ด้วยรหัสปุ่ม 'v' (0x76) เสมอ
+        // เพื่อป้องกันปัญหาเรื่อง Layout ภาษา (เช่น ภาษาไทย อ/v) 
+        // และป้องกัน Ghost Keys จากการส่งปุ่มซ้ำซ้อน
+        if (client && isConnected()) {
+            // บังคับส่งปุ่ม English 'v' (0x76) ไปยัง RDP เสมอเพื่อให้คำสั่ง Paste ทำงานได้ทุกภาษา
+            client.sendKeyEvent(1, 0x76);
+            client.sendKeyEvent(0, 0x76);
+        }
     }
 }
 
@@ -2426,32 +2438,37 @@ async function startViewer() {
         };
 
         keyboard = new Guacamole.Keyboard(window);
+        // Forward key events to the remote session while allowing local
+        // editable elements to behave normally.
         keyboard.onkeydown = (keysym) => {
             if (isLocalEditableElement(document.activeElement)) {
                 return true;
             }
+
             if (client === activeClient && isConnected()) {
-                activeClient.sendKeyEvent(1, keysym);
+                try {
+                    activeClient.sendKeyEvent(1, keysym);
+                } catch (_e) {
+                }
             }
-            // Allow Ctrl+C, Ctrl+V, and Ctrl+X to reach the browser
-            const isModifier = keyboard.pressed[0xFFE3] || keyboard.pressed[0xFFE4] || keyboard.pressed[0xFFE7] || keyboard.pressed[0xFFE8];
-            if (isModifier && (keysym === 0x63 || keysym === 0x76 || keysym === 0x78)) {
-                return true;
-            }
+
+            // Block default browser action when interacting with the remote
+            // session so keys go to the remote desktop.
             return false;
         };
+
         keyboard.onkeyup = (keysym) => {
             if (isLocalEditableElement(document.activeElement)) {
                 return true;
             }
+
             if (client === activeClient && isConnected()) {
-                activeClient.sendKeyEvent(0, keysym);
+                try {
+                    activeClient.sendKeyEvent(0, keysym);
+                } catch (_e) {
+                }
             }
-            // Allow Ctrl+C, Ctrl+V, and Ctrl+X to reach the browser
-            const isModifier = keyboard.pressed[0xFFE3] || keyboard.pressed[0xFFE4] || keyboard.pressed[0xFFE7] || keyboard.pressed[0xFFE8];
-            if (isModifier && (keysym === 0x63 || keysym === 0x76 || keysym === 0x78)) {
-                return true;
-            }
+
             return false;
         };
 
@@ -2705,7 +2722,7 @@ overlayLogoutButton.addEventListener('click', logout);
 logoutButton.addEventListener('click', logout);
 driveUploadButton?.addEventListener('click', () => {
     if (!isDriveAvailable()) {
-        console.log('[Drive] Upload button clicked but drive not available');
+        // // console.log('[Drive] Upload button clicked but drive not available');
         return;
     }
     if (!driveUploadInput) {
@@ -2713,24 +2730,24 @@ driveUploadButton?.addEventListener('click', () => {
     }
 
     beginDrivePickerFlow();
-    console.log('[Drive] Opening file picker');
+    // // console.log('[Drive] Opening file picker');
     driveUploadInput.click();
 });
 driveUploadInput?.addEventListener('change', (event) => {
-    console.log('[Drive] File picker changed:', event.target?.files?.length);
+    // // console.log('[Drive] File picker changed:', event.target?.files?.length);
     scheduleDrivePickerReturn(0);
     handleDriveUploads(event.target?.files);
 });
 driveUploadInput?.addEventListener('cancel', () => {
-    console.log('[Drive] File picker cancelled');
+    // // console.log('[Drive] File picker cancelled');
     scheduleDrivePickerReturn(0);
 });
 driveOpenFolderButton?.addEventListener('click', () => {
     if (!isDriveAvailable()) {
-        console.log('[Drive] Open folder clicked but drive not available');
+        // console.log('[Drive] Open folder clicked but drive not available');
         return;
     }
-    console.log('[Drive] Opening shared folder root');
+    // console.log('[Drive] Opening shared folder root');
     currentDrivePath = '';
     refreshDriveShare({ silent: false });
 });
