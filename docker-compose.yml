@@ -2,8 +2,10 @@ version: '3.8'
 
 services:
   guacd:
-    image: guacamole/guacd:latest
+    image: guacamole/guacd
     container_name: guacd
     restart: always
     ports:
       - "4822:4822"
+    volumes:
+      - ./shared-folder:/shared-folder
