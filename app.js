@@ -32,8 +32,35 @@ const RDP_RESIZE_METHOD = RDP_FORCE_DISPLAY_UPDATE
     : (['display-update', 'reconnect'].includes(process.env.RDP_RESIZE_METHOD)
         ? process.env.RDP_RESIZE_METHOD
         : 'display-update');
+const SUPPORTED_CONNECTION_TYPES = ['full', 'edge', 'onlyoffice'];
+const SUPPORTED_RDP_APP_LAUNCH_MODES = ['initial-program', 'remote-app'];
+const REQUESTED_RDP_APP_LAUNCH_MODE = String(process.env.RDP_APP_LAUNCH_MODE || '').trim().toLowerCase();
+const RDP_APP_LAUNCH_MODE = SUPPORTED_RDP_APP_LAUNCH_MODES.includes(REQUESTED_RDP_APP_LAUNCH_MODE)
+    ? REQUESTED_RDP_APP_LAUNCH_MODE
+    : 'initial-program';
+const RDP_EDGE_APP_PATH = process.env.RDP_EDGE_APP_PATH
+    || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+const RDP_EDGE_INITIAL_PROGRAM = process.env.RDP_EDGE_INITIAL_PROGRAM || RDP_EDGE_APP_PATH;
+const RDP_EDGE_REMOTE_APP = process.env.RDP_EDGE_REMOTE_APP
+    || '||msedge';
+const RDP_EDGE_REMOTE_APP_ARGS = process.env.RDP_EDGE_REMOTE_APP_ARGS
+    || '--new-window --no-first-run --no-default-browser-check --start-maximized --user-data-dir=C:\\Windows\\Temp\\EdgeRemoteApp';
+const RDP_ONLYOFFICE_APP_PATH = process.env.RDP_ONLYOFFICE_APP_PATH
+    || 'C:\\Program Files\\ONLYOFFICE\\DesktopEditors\\DesktopEditors.exe';
+const RDP_ONLYOFFICE_INITIAL_PROGRAM = process.env.RDP_ONLYOFFICE_INITIAL_PROGRAM || RDP_ONLYOFFICE_APP_PATH;
+const RDP_ONLYOFFICE_REMOTE_APP = process.env.RDP_ONLYOFFICE_REMOTE_APP
+    || '||DesktopEditors';
+const RDP_ONLYOFFICE_REMOTE_APP_DIR = process.env.RDP_ONLYOFFICE_REMOTE_APP_DIR
+    || 'C:\\Program Files\\ONLYOFFICE\\DesktopEditors';
 
 console.log(`[RDP] Resize method configured: ${RDP_RESIZE_METHOD}${RDP_FORCE_DISPLAY_UPDATE ? ' (forced via RDP_FORCE_DISPLAY_UPDATE)' : ''}`);
+console.log(`[RDP] App launch mode configured: ${RDP_APP_LAUNCH_MODE}`);
+if (RDP_APP_LAUNCH_MODE === 'remote-app' && !RDP_EDGE_REMOTE_APP.startsWith('||')) {
+    console.warn(`[RDP] Edge RemoteApp value should usually be an alias like "||msedge", not a file path: ${RDP_EDGE_REMOTE_APP}`);
+}
+if (RDP_APP_LAUNCH_MODE === 'remote-app' && !RDP_ONLYOFFICE_REMOTE_APP.startsWith('||')) {
+    console.warn(`[RDP] ONLYOFFICE RemoteApp value should usually be an alias like "||DesktopEditors", not a file path: ${RDP_ONLYOFFICE_REMOTE_APP}`);
+}
 const RDP_CLIPBOARD_NORMALIZATION = ['preserve', 'unix', 'windows'].includes(process.env.RDP_CLIPBOARD_NORMALIZATION)
     ? process.env.RDP_CLIPBOARD_NORMALIZATION
     : 'windows';
@@ -94,6 +121,7 @@ const server = http.createServer(app);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(['/api/session', '/api/debug/session', '/api/guacamole-token'], noStore);
 app.use(
     session({
         secret: SESSION_SECRET,
@@ -167,6 +195,44 @@ function parseBoolean(value, fallback) {
     }
 
     return fallback;
+}
+
+function noStore(_req, res, next) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+}
+
+function normalizeConnectionType(value) {
+    const requestedConnectionType = String(value || 'full').trim().toLowerCase();
+    return SUPPORTED_CONNECTION_TYPES.includes(requestedConnectionType) ? requestedConnectionType : 'full';
+}
+
+function applyAppLaunchSettings(settings, connectionType) {
+    if (RDP_APP_LAUNCH_MODE === 'initial-program') {
+        if (connectionType === 'edge') {
+            settings['initial-program'] = RDP_EDGE_INITIAL_PROGRAM;
+            return;
+        }
+
+        if (connectionType === 'onlyoffice') {
+            settings['initial-program'] = RDP_ONLYOFFICE_INITIAL_PROGRAM;
+        }
+
+        return;
+    }
+
+    if (connectionType === 'edge') {
+        settings['remote-app'] = RDP_EDGE_REMOTE_APP;
+        settings['remote-app-args'] = RDP_EDGE_REMOTE_APP_ARGS;
+        return;
+    }
+
+    if (connectionType === 'onlyoffice') {
+        settings['remote-app'] = RDP_ONLYOFFICE_REMOTE_APP;
+        settings['remote-app-dir'] = RDP_ONLYOFFICE_REMOTE_APP_DIR;
+    }
 }
 
 function loadPatchedGuacamoleLite() {
@@ -948,15 +1014,24 @@ app.post('/api/login', (req, res) => {
         return res.status(400).json({ error: 'Username and password are required.' });
     }
 
+    const connectionType = normalizeConnectionType(req.body.connectionType);
+    console.log(`[Login] requested connectionType=${connectionType}`);
+
     req.session.pendingRdpAuth = {
         username,
         password,
         driveId: createDriveId(),
+        connectionType,
         createdAt: Date.now()
     };
     delete req.session.rdpAuth;
 
-    res.json({ ok: true, validateMode: 'guacamole', redirectTo: '/rdp' });
+    res.json({
+        ok: true,
+        validateMode: connectionType === 'full' ? 'guacamole' : 'skip',
+        redirectTo: '/rdp',
+        connectionType
+    });
 });
 
 app.post('/api/login/confirm', (req, res) => {
@@ -969,11 +1044,13 @@ app.post('/api/login/confirm', (req, res) => {
     req.session.rdpAuth = {
         username: pendingAuth.username,
         password: pendingAuth.password,
-        driveId: pendingAuth.driveId
+        driveId: pendingAuth.driveId,
+        connectionType: normalizeConnectionType(pendingAuth.connectionType)
     };
+    console.log(`[Login] confirmed connectionType=${req.session.rdpAuth.connectionType}`);
     delete req.session.pendingRdpAuth;
 
-    res.json({ ok: true, redirectTo: '/rdp' });
+    res.json({ ok: true, redirectTo: '/rdp', connectionType: req.session.rdpAuth.connectionType });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -1004,7 +1081,8 @@ app.get('/api/session', (req, res) => {
         driveName: RDP_DRIVE_NAME,
         localFsEnabled: LOCAL_FS_ENABLED,
         sftpEnabled: SFTP_ENABLED,
-        sftpTarget: `${SFTP_HOST}:${SFTP_PORT}`
+        sftpTarget: `${SFTP_HOST}:${SFTP_PORT}`,
+        connectionType: req.session.rdpAuth?.connectionType || null
     });
 });
 
@@ -1013,7 +1091,8 @@ app.get('/api/debug/session', requireAuth, (req, res) => {
     res.json({
         authenticated: Boolean(req.session.rdpAuth),
         username: req.session.rdpAuth?.username || null,
-        driveId: req.session.rdpAuth?.driveId || null
+        driveId: req.session.rdpAuth?.driveId || null,
+        connectionType: req.session.rdpAuth?.connectionType || null
     });
 });
 
@@ -1055,6 +1134,15 @@ app.get('/api/guacamole-token', (req, res) => {
         settings.timezone = timezone;
     }
 
+    // Validate credentials with a plain RDP probe, then launch the selected app only in the real viewer session.
+    const connectionType = normalizeConnectionType(sessionAuth.connectionType);
+    if (!validationOnly) {
+        applyAppLaunchSettings(settings, connectionType);
+    }
+    console.log(
+        `[RDP] token mode=${validationOnly ? 'validate' : 'viewer'} connectionType=${connectionType} launchMode=${connectionType === 'full' ? 'desktop' : RDP_APP_LAUNCH_MODE} initialProgram=${settings['initial-program'] || 'none'} remoteApp=${settings['remote-app'] || 'none'}`
+    );
+
     const token = encryptToken({
         driveId: sessionAuth.driveId,
         connection: {
@@ -1068,6 +1156,8 @@ app.get('/api/guacamole-token', (req, res) => {
         wsPath: '/',
         targetHost: RDP_HOST,
         targetPort: RDP_PORT,
+        connectionType,
+        appLaunchMode: connectionType === 'full' ? 'desktop' : RDP_APP_LAUNCH_MODE,
         resizeMethod: RDP_RESIZE_METHOD,
         validationOnly,
         driveEnabled: !validationOnly && RDP_ENABLE_DRIVE,

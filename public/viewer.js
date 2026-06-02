@@ -36,6 +36,8 @@ let mouse = null;
 let keyboard = null;
 const isMac = /Mac|iPhone|iPod|iPad/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isTablet = /Android|Tablet|iPad/.test(navigator.userAgent);
+let lastKeyboardEvent = null;
+const forcedKeysyms = new Map();
 
 let activeTunnel = null;
 let clientState = Guacamole.Client.State.IDLE;
@@ -74,6 +76,7 @@ const FLOATING_PANEL_GAP = 12;
 const DRIVE_POLL_INTERVAL_MS = 4000;
 const AUTO_RECONNECT_MAX_ATTEMPTS = 0;
 const AUTO_RECONNECT_BASE_DELAY_MS = 900;
+const APP_STARTUP_DISCONNECT_GRACE_MS = 12000;
 const DEFAULT_DRIVE_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 
 const uiToggleDragState = {
@@ -325,6 +328,22 @@ function buildWebSocketUrl() {
 
 function buildConnectedStatus(host, port) {
     return `Connected to ${host}:${port}`;
+}
+
+function isAppConnection(tokenData) {
+    return tokenData?.connectionType === 'edge' || tokenData?.connectionType === 'onlyoffice';
+}
+
+function getAppConnectionName(tokenData) {
+    if (tokenData?.connectionType === 'edge') {
+        return 'Edge';
+    }
+
+    if (tokenData?.connectionType === 'onlyoffice') {
+        return 'ONLYOFFICE';
+    }
+
+    return 'remote app';
 }
 
 function markTunnelActivity() {
@@ -1768,7 +1787,8 @@ function buildTokenUrl() {
     const params = new URLSearchParams({
         width: String(width),
         height: String(height),
-        dpi: String(dpi)
+        dpi: String(dpi),
+        _: String(Date.now())
     });
 
     if (timezone) {
@@ -2139,14 +2159,14 @@ function handlePaste(event) {
     if (text) {
         sendClipboardTextToRemote(text);
         
-        // หลังจาก Sync Clipboard แล้ว ให้สั่ง Remote Paste ด้วยรหัสปุ่ม 'v' (0x76) เสมอ
-        // เพื่อป้องกันปัญหาเรื่อง Layout ภาษา (เช่น ภาษาไทย อ/v) 
-        // และป้องกัน Ghost Keys จากการส่งปุ่มซ้ำซ้อน
-        if (client && isConnected()) {
-            // บังคับส่งปุ่ม English 'v' (0x76) ไปยัง RDP เสมอเพื่อให้คำสั่ง Paste ทำงานได้ทุกภาษา
-            client.sendKeyEvent(1, 0x76);
-            client.sendKeyEvent(0, 0x76);
-        }
+        // // หลังจาก Sync Clipboard แล้ว ให้สั่ง Remote Paste ด้วยรหัสปุ่ม 'v' (0x76) เสมอ
+        // // เพื่อป้องกันปัญหาเรื่อง Layout ภาษา (เช่น ภาษาไทย อ/v) 
+        // // และป้องกัน Ghost Keys จากการส่งปุ่มซ้ำซ้อน
+        // if (client && isConnected()) {
+        //     // บังคับส่งปุ่ม English 'v' (0x76) ไปยัง RDP เสมอเพื่อให้คำสั่ง Paste ทำงานได้ทุกภาษา
+        //     client.sendKeyEvent(1, 0x76);
+        //     client.sendKeyEvent(0, 0x76);
+        // }
     }
 }
 
@@ -2259,6 +2279,37 @@ async function startViewer() {
         viewerTitle.textContent = displayHost ? `${displayHost}${displayPort ? ':' + displayPort : ''} as ${sessionData.username}` : `${sessionData.targetHost} as ${sessionData.username}`;
 
         let hasConnectedOnce = false;
+        let connectedAt = 0;
+        let appDisconnectHandled = false;
+        const viewerStartedAt = Date.now();
+        const appName = getAppConnectionName(tokenData);
+        const handleStartupAppDisconnect = (message) => {
+            if (appDisconnectHandled) {
+                return true;
+            }
+
+            const startupAge = Date.now() - (connectedAt || viewerStartedAt);
+
+            if (
+                !isAppConnection(tokenData)
+                || startupAge > APP_STARTUP_DISCONNECT_GRACE_MS
+            ) {
+                return false;
+            }
+
+            appDisconnectHandled = true;
+            connecting = false;
+            tunnelState = Guacamole.Tunnel.State.CLOSED;
+            statusText.textContent = 'Remote app ended';
+            setOverlay(
+                'Remote App Ended',
+                message || `${appName} closed immediately or Windows rejected the app launch. Try Full Desktop, or verify the app path/RemoteApp settings on the RDP host.`,
+                false,
+                true,
+                true
+            );
+            return true;
+        };
         const tunnel = new Guacamole.WebSocketTunnel(buildWebSocketUrl());
         const activeClient = new Guacamole.Client(tunnel);
         client = activeClient;
@@ -2275,6 +2326,10 @@ async function startViewer() {
                 return originalTunnelSendMessage(...args);
             } catch (error) {
                 if (client === activeClient && hasConnectedOnce) {
+                    if (handleStartupAppDisconnect()) {
+                        return undefined;
+                    }
+
                     scheduleAutomaticReconnect(
                         'The browser lost the live RDP connection while the page was idle. Reconnecting now...',
                         { immediate: true }
@@ -2300,6 +2355,10 @@ async function startViewer() {
                 return;
             }
 
+            if (handleStartupAppDisconnect()) {
+                return;
+            }
+
             scheduleAutomaticReconnect(
                 'The live RDP link became unavailable while the page was idle. Reconnecting now...',
                 { immediate: true }
@@ -2320,6 +2379,10 @@ async function startViewer() {
             }
 
             if (state === Guacamole.Tunnel.State.CLOSED && hasConnectedOnce) {
+                if (handleStartupAppDisconnect()) {
+                    return;
+                }
+
                 scheduleAutomaticReconnect(
                     'The browser lost the live RDP connection while the page was idle. Reconnecting now...',
                     { immediate: true }
@@ -2445,6 +2508,14 @@ async function startViewer() {
                 return true;
             }
 
+            // If Ctrl or Cmd is held and a letter key (KeyA-KeyZ) is pressed, force the English keysym.
+            // This ensures that shortcuts (Ctrl+C, Ctrl+V, etc.) work regardless of the local keyboard layout (e.g., Thai).
+            if (lastKeyboardEvent && (lastKeyboardEvent.ctrlKey || lastKeyboardEvent.metaKey) && lastKeyboardEvent.code.startsWith('Key')) {
+                const englishKeysym = lastKeyboardEvent.code.slice(3).toLowerCase().charCodeAt(0);
+                forcedKeysyms.set(lastKeyboardEvent.code, englishKeysym);
+                keysym = englishKeysym;
+            }
+
             if (client === activeClient && isConnected()) {
                 try {
                     activeClient.sendKeyEvent(1, keysym);
@@ -2460,6 +2531,12 @@ async function startViewer() {
         keyboard.onkeyup = (keysym) => {
             if (isLocalEditableElement(document.activeElement)) {
                 return true;
+            }
+
+            // Use the same English keysym that was forced during onkeydown to ensure key release matches key press.
+            if (lastKeyboardEvent && forcedKeysyms.has(lastKeyboardEvent.code)) {
+                keysym = forcedKeysyms.get(lastKeyboardEvent.code);
+                forcedKeysyms.delete(lastKeyboardEvent.code);
             }
 
             if (client === activeClient && isConnected()) {
@@ -2590,6 +2667,10 @@ async function startViewer() {
             }
 
             if (!isAuthorizationError && hasConnectedOnce) {
+                if (handleStartupAppDisconnect(message)) {
+                    return;
+                }
+
                 scheduleAutomaticReconnect(
                     'The live RDP session paused unexpectedly. Reconnecting now...',
                     { immediate: true }
@@ -2610,6 +2691,7 @@ async function startViewer() {
 
             if (state === Guacamole.Client.State.CONNECTED) {
                 hasConnectedOnce = true;
+                connectedAt = Date.now();
                 connecting = false;
                 tunnelState = activeTunnel?.state ?? Guacamole.Tunnel.State.OPEN;
                 markTunnelActivity();
@@ -2658,10 +2740,18 @@ async function startViewer() {
                 }
 
                 if (hasConnectedOnce) {
+                    if (handleStartupAppDisconnect()) {
+                        return;
+                    }
+
                     scheduleAutomaticReconnect(
                         'The live RDP session was interrupted while the page was idle. Reconnecting now...',
                         { immediate: true }
                     );
+                    return;
+                }
+
+                if (handleStartupAppDisconnect()) {
                     return;
                 }
 
@@ -2795,8 +2885,10 @@ window.visualViewport?.addEventListener('resize', () => {
 // Do not register global paste/clipboard shortcut handlers anymore - let browser/OS
 // and the user's keyboard/menu actions flow naturally into the remote session.
 
-window.addEventListener('copy', () => scheduleLocalClipboardSync(), false);
-window.addEventListener('cut', () => scheduleLocalClipboardSync(), false);
+window.addEventListener('keydown', (e) => { lastKeyboardEvent = e; }, true);
+window.addEventListener('keyup', (e) => { lastKeyboardEvent = e; }, true);
+window.addEventListener('copy', () => scheduleLocalClipboardSync());
+window.addEventListener('cut', () => scheduleLocalClipboardSync());
 window.addEventListener('paste', handlePaste, false);
 
 window.addEventListener('focus', (event) => {

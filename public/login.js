@@ -31,6 +31,18 @@ function hideErrorPopup() {
     errorModal.classList.remove('active');
 }
 
+function updateLoginButtonLabel() {
+    const checked = document.querySelector('input[name="connectionType"]:checked');
+    const v = checked ? String(checked.value || 'full') : 'full';
+    if (v === 'edge') {
+        loginButton.textContent = 'Open Edge';
+    } else if (v === 'onlyoffice') {
+        loginButton.textContent = 'Open ONLYOFFICE';
+    } else {
+        loginButton.textContent = 'Open RDP';
+    }
+}
+
 function buildWebSocketUrl() {
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
     return `${protocol}://${location.host}/`;
@@ -45,7 +57,8 @@ function buildTokenUrl(mode = 'viewer') {
         width: String(width),
         height: String(height),
         dpi: String(dpi),
-        mode
+        mode,
+        _: String(Date.now())
     });
 
     if (timezone) {
@@ -226,6 +239,28 @@ window.addEventListener('beforeunload', () => {
     activeConnectionTest = null;
 });
 
+// wire segmented radio control and initial label
+const _connectionRadios = Array.from(document.querySelectorAll('input[name="connectionType"]'));
+if (_connectionRadios.length) {
+    _connectionRadios.forEach((r) => r.addEventListener('change', updateLoginButtonLabel));
+    updateLoginButtonLabel();
+}
+
+// populate the target host from server session info
+(async () => {
+    try {
+        const resp = await fetch('/api/session');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const hostEl = document.getElementById('target-host');
+        if (hostEl && data.targetHost) {
+            hostEl.textContent = data.targetHost;
+        }
+    } catch (_e) {
+        // ignore
+    }
+})();
+
 form.addEventListener('submit', async (event) => {
     event.preventDefault();
     hideErrorPopup();
@@ -236,6 +271,9 @@ form.addEventListener('submit', async (event) => {
         username: String(formData.get('username') || '').trim(),
         password: String(formData.get('password') || '')
     };
+
+    const connectionType = String(formData.get('connectionType') || 'full');
+    payload.connectionType = connectionType;
 
     if (!payload.username || !payload.password) {
         errorMessage.textContent = 'Username and password are required.';
@@ -257,14 +295,16 @@ form.addEventListener('submit', async (event) => {
             throw new Error(loginData.error || 'Login failed');
         }
 
-        const tokenResponse = await fetch(buildTokenUrl('validate'));
-        const tokenData = await tokenResponse.json();
+        if (loginData.validateMode !== 'skip') {
+            const tokenResponse = await fetch(buildTokenUrl('validate'));
+            const tokenData = await tokenResponse.json();
 
-        if (!tokenResponse.ok) {
-            throw new Error(tokenData.error || 'Unable to create RDP session');
+            if (!tokenResponse.ok) {
+                throw new Error(tokenData.error || 'Unable to create RDP session');
+            }
+
+            await testConnection(tokenData);
         }
-
-        await testConnection(tokenData);
 
         const confirmResponse = await fetch('/api/login/confirm', {
             method: 'POST'

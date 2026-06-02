@@ -80,6 +80,63 @@ h1, h2, p {
     gap: 8px;
 }
 
+/* Segmented control for connection type */
+.segmented-control {
+    display: flex;
+    gap: 8px;
+}
+
+.segmented-item {
+    display: block;
+}
+
+.segmented-item input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.segmented-button {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 92px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.18s ease;
+    text-align: center;
+}
+
+.segmented-button strong {
+    font-size: 0.95rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.segmented-button small {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.segmented-item input[type="radio"]:checked + .segmented-button {
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    color: #082f49;
+    border-color: rgba(14, 165, 233, 0.9);
+    box-shadow: 0 6px 20px rgba(2, 6, 23, 0.45);
+}
+
+.segmented-item input[type="radio"]:focus + .segmented-button {
+    outline: 3px solid rgba(56, 189, 248, 0.12);
+    outline-offset: 2px;
+}
+
 .field span {
     color: #cbd5e1;
     font-size: 0.95rem;

@@ -99,6 +99,35 @@
                 <input id="password" name="password" type="password" autocomplete="current-password" required>
             </label>
 
+            <label class="field">
+                <span>Connection</span>
+                <div class="segmented-control" role="radiogroup" aria-label="Connection type">
+                    <label class="segmented-item" title="Full desktop session">
+                        <input type="radio" name="connectionType" value="full" checked>
+                        <span class="segmented-button">
+                            <strong>Full</strong>
+                            <small>Desktop</small>
+                        </span>
+                    </label>
+
+                    <label class="segmented-item" title="Remote app - Microsoft Edge">
+                        <input type="radio" name="connectionType" value="edge">
+                        <span class="segmented-button">
+                            <strong>Edge</strong>
+                            <small>Browser app</small>
+                        </span>
+                    </label>
+
+                    <label class="segmented-item" title="Remote app - ONLYOFFICE">
+                        <input type="radio" name="connectionType" value="onlyoffice">
+                        <span class="segmented-button">
+                            <strong>ONLYOFFICE</strong>
+                            <small>Editor</small>
+                        </span>
+                    </label>
+                </div>
+            </label>
+
             <button type="submit" class="button" id="login-button">Open RDP</button>
             <p id="error-message" class="error" hidden></p>
         </form>
