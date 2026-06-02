@@ -417,8 +417,6 @@ services:
 - `viewer.js` สร้าง link `Download ZIP` ไปที่ `/api/drive/download-folder` แต่ backend ยังไม่มี route นี้ มีเฉพาะ `/api/fs/download-folder` และ `/api/sftp/download-folder`
 - `viewer.js createDriveFolder()` เรียก `/api/fs/folder` ในขณะที่ list/upload/delete หลักของ panel ใช้ `/api/drive` ถ้าต้องการสร้าง folder ใน redirected drive ควรเปลี่ยนให้เรียก `/api/drive/folder`
 - `Cuddy/Caddyfile` proxy ไปที่ `192.168.101.3:3000` แบบ fixed IP
-- `docker-compose.yml` ใช้ image `guacamole-server:latest` ส่วน `docker-compose.old.yml` ใช้ `guacamole/guacd`; ต้องเลือก image ที่มีอยู่จริงใน environment ที่ deploy
-- `test.json` ยังไม่ได้ถูก import หรือเรียกใช้จาก frontend/backend หลัก
 
 ## สรุปสั้น
 
